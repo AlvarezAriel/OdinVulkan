@@ -5,3 +5,7 @@ compile:
 run:
 	make compile
 	odin run .
+
+arm:
+	make compile
+	odin build . -target:linux_arm64	

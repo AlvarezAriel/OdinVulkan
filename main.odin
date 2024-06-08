@@ -2,11 +2,15 @@ package main
 
 import "base:runtime"
 
+import "core:fmt"
 import "core:log"
+import "core:mem"
+import "core:os"
 import "core:slice"
 import "core:strings"
 
 
+import "geometry"
 import "vendor:glfw"
 import vk "vendor:vulkan"
 
@@ -45,7 +49,8 @@ g_swapchain_views: []vk.ImageView
 g_swapchain_format: vk.SurfaceFormatKHR
 g_swapchain_extent: vk.Extent2D
 g_swapchain_frame_buffers: []vk.Framebuffer
-
+g_swapchaing_vertex_buffer: Buffer
+g_swapchaing_index_buffer: Buffer
 g_vert_shader_module: vk.ShaderModule
 g_frag_shader_module: vk.ShaderModule
 g_shader_stages: [2]vk.PipelineShaderStageCreateInfo
@@ -66,6 +71,13 @@ g_in_flight_fences: [MAX_FRAMES_IN_FLIGHT]vk.Fence
 DEVICE_EXTENSIONS := []cstring {
 	vk.KHR_SWAPCHAIN_EXTENSION_NAME,
 	// KHR_PORTABILITY_SUBSET_EXTENSION_NAME,
+}
+
+Buffer :: struct {
+	buffer: vk.Buffer,
+	memory: vk.DeviceMemory,
+	length: int,
+	size:   vk.DeviceSize,
 }
 
 main :: proc() {
@@ -107,7 +119,10 @@ main :: proc() {
 		},
 	}
 
-	extensions := slice.clone_to_dynamic(glfw.GetRequiredInstanceExtensions(), context.temp_allocator)
+	extensions := slice.clone_to_dynamic(
+		glfw.GetRequiredInstanceExtensions(),
+		context.temp_allocator,
+	)
 
 	// MacOS is a special snowflake ;)
 	when ODIN_OS == .Darwin {
@@ -173,7 +188,12 @@ main :: proc() {
 		indices_set[indices.graphics.?] = {}
 		indices_set[indices.present.?] = {}
 
-		queue_create_infos := make([dynamic]vk.DeviceQueueCreateInfo, 0, len(indices_set), context.temp_allocator)
+		queue_create_infos := make(
+			[dynamic]vk.DeviceQueueCreateInfo,
+			0,
+			len(indices_set),
+			context.temp_allocator,
+		)
 		for family in indices_set {
 			append(
 				&queue_create_infos,
@@ -182,7 +202,7 @@ main :: proc() {
 					queueFamilyIndex = indices.graphics.?,
 					queueCount = 1,
 					pQueuePriorities = raw_data([]f32{1}),
-				},// Scheduling priority between 0 and 1.
+				}, // Scheduling priority between 0 and 1.
 			)
 		}
 
@@ -286,8 +306,14 @@ main :: proc() {
 			pDynamicStates    = raw_data(dynamic_states),
 		}
 
+		bindingDescription := geometry.myVertexBindingDescriptor()
+		attributeDescriptions := geometry.myVertexAttributeDescription()
 		vertex_input_info := vk.PipelineVertexInputStateCreateInfo {
-			sType = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+			sType                           = .PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+			vertexBindingDescriptionCount   = 1,
+			pVertexBindingDescriptions      = &bindingDescription,
+			vertexAttributeDescriptionCount = len(attributeDescriptions),
+			pVertexAttributeDescriptions    = &attributeDescriptions[0],
 		}
 
 		input_assembly := vk.PipelineInputAssemblyStateCreateInfo {
@@ -370,6 +396,12 @@ main :: proc() {
 	}
 	defer vk.DestroyCommandPool(g_device, g_command_pool, nil)
 
+	// TAG: use create_vertex_buffer
+	fmt.printfln("VERTEX BUFFER: start creation")
+	create_vertex_buffer(geometry.my_vertices)
+	create_index_buffer(geometry.my_indices)
+	fmt.printfln("VERTEX BUFFER: finished creation")
+
 	// Set up sync primitives.
 	{
 		sem_info := vk.SemaphoreCreateInfo {
@@ -446,7 +478,9 @@ main :: proc() {
 		}
 		present_result := vk.QueuePresentKHR(g_present_queue, &present_info)
 		switch {
-		case present_result == .ERROR_OUT_OF_DATE_KHR || present_result == .SUBOPTIMAL_KHR || g_framebuffer_resized:
+		case present_result == .ERROR_OUT_OF_DATE_KHR ||
+		     present_result == .SUBOPTIMAL_KHR ||
+		     g_framebuffer_resized:
 			g_framebuffer_resized = false
 			recreate_swapchain()
 		case present_result == .SUCCESS:
@@ -622,7 +656,12 @@ query_swapchain_support :: proc(
 		vk.GetPhysicalDeviceSurfaceFormatsKHR(device, g_surface, &count, nil) or_return
 
 		support.formats = make([]vk.SurfaceFormatKHR, count, allocator)
-		vk.GetPhysicalDeviceSurfaceFormatsKHR(device, g_surface, &count, raw_data(support.formats)) or_return
+		vk.GetPhysicalDeviceSurfaceFormatsKHR(
+			device,
+			g_surface,
+			&count,
+			raw_data(support.formats),
+		) or_return
 	}
 
 	{
@@ -630,7 +669,12 @@ query_swapchain_support :: proc(
 		vk.GetPhysicalDeviceSurfacePresentModesKHR(device, g_surface, &count, nil) or_return
 
 		support.presentModes = make([]vk.PresentModeKHR, count, allocator)
-		vk.GetPhysicalDeviceSurfacePresentModesKHR(device, g_surface, &count, raw_data(support.presentModes)) or_return
+		vk.GetPhysicalDeviceSurfacePresentModesKHR(
+			device,
+			g_surface,
+			&count,
+			raw_data(support.presentModes),
+		) or_return
 	}
 
 	return
@@ -665,12 +709,18 @@ choose_swapchain_extent :: proc(capabilities: vk.SurfaceCapabilitiesKHR) -> vk.E
 	}
 
 	width, height := glfw.GetFramebufferSize(g_window)
-	return(
-		vk.Extent2D {
-			width = clamp(u32(width), capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
-			height = clamp(u32(height), capabilities.minImageExtent.height, capabilities.maxImageExtent.height),
-		} \
-	)
+	return (vk.Extent2D {
+				width = clamp(
+					u32(width),
+					capabilities.minImageExtent.width,
+					capabilities.maxImageExtent.width,
+				),
+				height = clamp(
+					u32(height),
+					capabilities.minImageExtent.height,
+					capabilities.maxImageExtent.height,
+				),
+			})
 }
 
 glfw_error_callback :: proc "c" (code: i32, description: cstring) {
@@ -735,7 +785,8 @@ create_swapchain :: proc() {
 		g_swapchain_extent = extent
 
 		image_count := support.capabilities.minImageCount + 1
-		if support.capabilities.maxImageCount > 0 && image_count > support.capabilities.maxImageCount {
+		if support.capabilities.maxImageCount > 0 &&
+		   image_count > support.capabilities.maxImageCount {
 			image_count = support.capabilities.maxImageCount
 		}
 
@@ -757,7 +808,9 @@ create_swapchain :: proc() {
 		if indices.graphics != indices.present {
 			create_info.imageSharingMode = .CONCURRENT
 			create_info.queueFamilyIndexCount = 2
-			create_info.pQueueFamilyIndices = raw_data([]u32{indices.graphics.?, indices.present.?})
+			create_info.pQueueFamilyIndices = raw_data(
+				[]u32{indices.graphics.?, indices.present.?},
+			)
 		}
 
 		must(vk.CreateSwapchainKHR(g_device, &create_info, nil, &g_swapchain))
@@ -812,18 +865,184 @@ create_framebuffers :: proc() {
 	}
 }
 
+create_vertex_buffer :: proc(vertices: []geometry.MyVertex) {
+	g_swapchaing_vertex_buffer.length = len(vertices)
+	g_swapchaing_vertex_buffer.size =
+	cast(vk.DeviceSize)(len(vertices) * size_of(geometry.MyVertex))
+
+	fmt.printfln("VERTEX BUFFER: creating staging buffer")
+	staging: Buffer
+	create_buffer(
+		size_of(geometry.MyVertex),
+		len(vertices),
+		{.TRANSFER_SRC},
+		{.HOST_VISIBLE, .HOST_COHERENT},
+		&staging,
+	)
+
+	data: rawptr
+	vk.MapMemory(g_device, staging.memory, 0, g_swapchaing_vertex_buffer.size, {}, &data)
+	mem.copy(data, raw_data(vertices), cast(int)g_swapchaing_vertex_buffer.size)
+	vk.UnmapMemory(g_device, staging.memory)
+
+	fmt.printfln("VERTEX BUFFER: creating device local buffer")
+	create_buffer(
+		size_of(geometry.MyVertex),
+		len(vertices),
+		{.VERTEX_BUFFER, .TRANSFER_DST},
+		{.DEVICE_LOCAL},
+		&g_swapchaing_vertex_buffer,
+	)
+
+	fmt.printfln("VERTEX BUFFER: copying staging buffer to device local")
+	copy_buffer(staging, g_swapchaing_vertex_buffer, g_swapchaing_vertex_buffer.size)
+
+	fmt.printfln("VERTEX BUFFER: cleaning staging buffer")
+	vk.FreeMemory(g_device, staging.memory, nil)
+	vk.DestroyBuffer(g_device, staging.buffer, nil)
+}
+
+create_index_buffer :: proc(indices: []u16) {
+	g_swapchaing_index_buffer.length = len(indices)
+	g_swapchaing_index_buffer.size = cast(vk.DeviceSize)(len(indices) * size_of(indices[0]))
+
+	staging: Buffer
+	create_buffer(
+		size_of(indices[0]),
+		len(indices),
+		{.TRANSFER_SRC},
+		{.HOST_VISIBLE, .HOST_COHERENT},
+		&staging,
+	)
+
+	data: rawptr
+	vk.MapMemory(g_device, staging.memory, 0, g_swapchaing_index_buffer.size, {}, &data)
+	mem.copy(data, raw_data(indices), cast(int)g_swapchaing_index_buffer.size)
+	vk.UnmapMemory(g_device, staging.memory)
+
+	create_buffer(
+		size_of(geometry.MyVertex),
+		len(indices),
+		{.INDEX_BUFFER, .TRANSFER_DST},
+		{.DEVICE_LOCAL},
+		&g_swapchaing_index_buffer,
+	)
+	copy_buffer(staging, g_swapchaing_index_buffer, g_swapchaing_index_buffer.size)
+
+	vk.FreeMemory(g_device, staging.memory, nil)
+	vk.DestroyBuffer(g_device, staging.buffer, nil)
+}
+
+// TODO: You may wish to create a separate command pool for these kinds of short-lived buffers, 
+// because the implementation may be able to apply memory allocation optimizations. 
+// You should use the VK_COMMAND_POOL_CREATE_TRANSIENT_BIT flag during command pool generation in that case.
+// https://vulkan-tutorial.com/Vertex_buffers/Staging_buffer
+copy_buffer :: proc(src, dst: Buffer, size: vk.DeviceSize) {
+	alloc_info := vk.CommandBufferAllocateInfo {
+		sType              = .COMMAND_BUFFER_ALLOCATE_INFO,
+		level              = .PRIMARY,
+		commandPool        = g_command_pool,
+		commandBufferCount = 1,
+	}
+
+	fmt.printfln("BUFFER: AllocateCommandBuffers")
+	cmd_buffer: vk.CommandBuffer
+	vk.AllocateCommandBuffers(g_device, &alloc_info, &cmd_buffer)
+
+	begin_info := vk.CommandBufferBeginInfo {
+		sType = .COMMAND_BUFFER_BEGIN_INFO,
+		flags = {.ONE_TIME_SUBMIT},
+	}
+
+	fmt.printfln("BUFFER: BeginCommandBuffer")
+	vk.BeginCommandBuffer(cmd_buffer, &begin_info)
+
+	copy_region := vk.BufferCopy {
+		srcOffset = 0,
+		dstOffset = 0,
+		size      = size,
+	}
+	vk.CmdCopyBuffer(cmd_buffer, src.buffer, dst.buffer, 1, &copy_region)
+	vk.EndCommandBuffer(cmd_buffer)
+	fmt.printfln("BUFFER: EndCommandBuffer")
+
+	submit_info := vk.SubmitInfo {
+		sType              = .SUBMIT_INFO,
+		commandBufferCount = 1,
+		pCommandBuffers    = &cmd_buffer,
+	}
+
+	vk.QueueSubmit(g_graphics_queue, 1, &submit_info, {})
+	vk.QueueWaitIdle(g_graphics_queue)
+	vk.FreeCommandBuffers(g_device, g_command_pool, 1, &cmd_buffer)
+}
+
+// TODO: It should be noted that in a real world application, you're not supposed to actually call vkAllocateMemory for every individual buffer. 
+// The maximum number of simultaneous memory allocations is limited by the maxMemoryAllocationCount physical device limit, which may be 
+// as low as 4096 even on high end hardware like an NVIDIA GTX 1080. The right way to allocate memory for a large number of objects at the 
+// same time is to create a custom allocator that splits up a single allocation among many different objects by using the offset parameters 
+// that we've seen in many functions.
+//You can either implement such an allocator yourself, or use the VulkanMemoryAllocator library provided by the GPUOpen initiative. 
+// https://vulkan-tutorial.com/Vertex_buffers/Staging_buffer
+create_buffer :: proc(
+	member_size: int,
+	count: int,
+	usage: vk.BufferUsageFlags,
+	properties: vk.MemoryPropertyFlags,
+	buffer: ^Buffer,
+) {
+	buffer_info := vk.BufferCreateInfo {
+		sType       = .BUFFER_CREATE_INFO,
+		size        = cast(vk.DeviceSize)(member_size * count),
+		usage       = usage,
+		sharingMode = .EXCLUSIVE,
+	}
+
+	if res := vk.CreateBuffer(g_device, &buffer_info, nil, &buffer.buffer); res != .SUCCESS {
+		fmt.eprintf("Error: failed to create buffer\n")
+		os.exit(1)
+	}
+
+	fmt.println("BUFFER: gathering memory requirements")
+	mem_requirements: vk.MemoryRequirements
+	vk.GetBufferMemoryRequirements(g_device, buffer.buffer, &mem_requirements)
+
+	alloc_info := vk.MemoryAllocateInfo {
+		sType           = .MEMORY_ALLOCATE_INFO,
+		allocationSize  = mem_requirements.size,
+		memoryTypeIndex = find_memory_type(
+			mem_requirements.memoryTypeBits,
+			{.HOST_VISIBLE, .HOST_COHERENT},
+		),
+	}
+
+	if res := vk.AllocateMemory(g_device, &alloc_info, nil, &buffer.memory); res != .SUCCESS {
+		fmt.eprintf("Error: Failed to allocate buffer memory!\n")
+		os.exit(1)
+	}
+
+	vk.BindBufferMemory(g_device, buffer.buffer, buffer.memory, 0)
+}
+
+
 destroy_framebuffers :: proc() {
-	for frame_buffer in g_swapchain_frame_buffers {vk.DestroyFramebuffer(g_device, frame_buffer, nil)}
+	for frame_buffer in g_swapchain_frame_buffers {vk.DestroyFramebuffer(
+			g_device,
+			frame_buffer,
+			nil,
+		)}
 	delete(g_swapchain_frame_buffers)
 }
 
 recreate_swapchain :: proc() {
 	// Don't do anything when minimized.
-	for w, h := glfw.GetFramebufferSize(g_window); w == 0 || h == 0; w, h = glfw.GetFramebufferSize(g_window) {
+	for w, h := glfw.GetFramebufferSize(g_window);
+	    w == 0 || h == 0;
+	    w, h = glfw.GetFramebufferSize(g_window) {
 		glfw.WaitEvents()
 
 		// Handle closing while minimized.
-		if glfw.WindowShouldClose(g_window) { break }
+		if glfw.WindowShouldClose(g_window) {break}
 	}
 
 	vk.DeviceWaitIdle(g_device)
@@ -868,6 +1087,11 @@ record_command_buffer :: proc(command_buffer: vk.CommandBuffer, image_index: u32
 
 	vk.CmdBindPipeline(command_buffer, .GRAPHICS, g_pipeline)
 
+	vertex_buffers := [?]vk.Buffer{g_swapchaing_vertex_buffer.buffer}
+	offsets := [?]vk.DeviceSize{0}
+	vk.CmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffers[0], &offsets[0])
+	vk.CmdBindIndexBuffer(command_buffer, g_swapchaing_index_buffer.buffer, 0, .UINT16)
+
 	viewport := vk.Viewport {
 		width    = f32(g_swapchain_extent.width),
 		height   = f32(g_swapchain_extent.height),
@@ -880,7 +1104,7 @@ record_command_buffer :: proc(command_buffer: vk.CommandBuffer, image_index: u32
 	}
 	vk.CmdSetScissor(command_buffer, 0, 1, &scissor)
 
-	vk.CmdDraw(command_buffer, 3, 1, 0, 0)
+	vk.CmdDrawIndexed(command_buffer, cast(u32)g_swapchaing_index_buffer.length, 1, 0, 0, 0);
 
 	vk.CmdEndRenderPass(command_buffer)
 
@@ -895,4 +1119,18 @@ must :: proc(result: vk.Result, loc := #caller_location) {
 	if result != .SUCCESS {
 		log.panicf("vulkan failure %v", result, location = loc)
 	}
+}
+
+find_memory_type :: proc(type_filter: u32, properties: vk.MemoryPropertyFlags) -> u32 {
+	mem_properties: vk.PhysicalDeviceMemoryProperties
+	vk.GetPhysicalDeviceMemoryProperties(g_physical_device, &mem_properties)
+	for i in 0 ..< mem_properties.memoryTypeCount {
+		if (type_filter & (1 << i) != 0) &&
+		   (mem_properties.memoryTypes[i].propertyFlags & properties) == properties {
+			return i
+		}
+	}
+
+	fmt.eprintf("Error: Failed to find suitable memory type!\n")
+	os.exit(1)
 }
