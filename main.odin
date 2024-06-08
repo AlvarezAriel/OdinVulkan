@@ -11,6 +11,7 @@ import "core:strings"
 
 
 import "geometry"
+import "vulkan_utils"
 import "vendor:glfw"
 import vk "vendor:vulkan"
 
@@ -163,22 +164,22 @@ main :: proc() {
 	create_info.enabledExtensionCount = u32(len(extensions))
 	create_info.ppEnabledExtensionNames = raw_data(extensions)
 
-	must(vk.CreateInstance(&create_info, nil, &g_instance))
+	vulkan_utils.must(vk.CreateInstance(&create_info, nil, &g_instance))
 	defer vk.DestroyInstance(g_instance, nil)
 
 	vk.load_proc_addresses_instance(g_instance)
 
 	when ENABLE_VALIDATION_LAYERS {
 		dbg_messenger: vk.DebugUtilsMessengerEXT
-		must(vk.CreateDebugUtilsMessengerEXT(g_instance, &dbg_create_info, nil, &dbg_messenger))
+		vulkan_utils.must(vk.CreateDebugUtilsMessengerEXT(g_instance, &dbg_create_info, nil, &dbg_messenger))
 		defer vk.DestroyDebugUtilsMessengerEXT(g_instance, dbg_messenger, nil)
 	}
 
-	must(glfw.CreateWindowSurface(g_instance, g_window, nil, &g_surface))
+	vulkan_utils.must(glfw.CreateWindowSurface(g_instance, g_window, nil, &g_surface))
 	defer vk.DestroySurfaceKHR(g_instance, g_surface, nil)
 
 	// Pick a suitable GPU.
-	must(pick_physical_device())
+	vulkan_utils.must(pick_physical_device())
 
 	// Setup logical device, 
 	indices := find_queue_families(g_physical_device)
@@ -216,7 +217,7 @@ main :: proc() {
 			enabledExtensionCount   = u32(len(DEVICE_EXTENSIONS)),
 		}
 
-		must(vk.CreateDevice(g_physical_device, &device_create_info, nil, &g_device))
+		vulkan_utils.must(vk.CreateDevice(g_physical_device, &device_create_info, nil, &g_device))
 
 		vk.GetDeviceQueue(g_device, indices.graphics.?, 0, &g_graphics_queue)
 		vk.GetDeviceQueue(g_device, indices.present.?, 0, &g_present_queue)
@@ -228,7 +229,7 @@ main :: proc() {
 
 	// Load shaders.
 	{
-		g_vert_shader_module = create_shader_module(SHADER_VERT)
+		g_vert_shader_module = vulkan_utils.create_shader_module(g_device, SHADER_VERT)
 		g_shader_stages[0] = vk.PipelineShaderStageCreateInfo {
 			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
 			stage  = {.VERTEX},
@@ -236,7 +237,7 @@ main :: proc() {
 			pName  = "main",
 		}
 
-		g_frag_shader_module = create_shader_module(SHADER_FRAG)
+		g_frag_shader_module = vulkan_utils.create_shader_module(g_device, SHADER_FRAG)
 		g_shader_stages[1] = vk.PipelineShaderStageCreateInfo {
 			sType  = .PIPELINE_SHADER_STAGE_CREATE_INFO,
 			stage  = {.FRAGMENT},
@@ -290,7 +291,7 @@ main :: proc() {
 			pDependencies   = &dependency,
 		}
 
-		must(vk.CreateRenderPass(g_device, &render_pass, nil, &g_render_pass))
+		vulkan_utils.must(vk.CreateRenderPass(g_device, &render_pass, nil, &g_render_pass))
 	}
 	defer vk.DestroyRenderPass(g_device, g_render_pass, nil)
 
@@ -354,7 +355,7 @@ main :: proc() {
 		pipeline_layout := vk.PipelineLayoutCreateInfo {
 			sType = .PIPELINE_LAYOUT_CREATE_INFO,
 		}
-		must(vk.CreatePipelineLayout(g_device, &pipeline_layout, nil, &g_pipeline_layout))
+		vulkan_utils.must(vk.CreatePipelineLayout(g_device, &pipeline_layout, nil, &g_pipeline_layout))
 
 		pipeline := vk.GraphicsPipelineCreateInfo {
 			sType               = .GRAPHICS_PIPELINE_CREATE_INFO,
@@ -372,7 +373,7 @@ main :: proc() {
 			subpass             = 0,
 			basePipelineIndex   = -1,
 		}
-		must(vk.CreateGraphicsPipelines(g_device, 0, 1, &pipeline, nil, &g_pipeline))
+		vulkan_utils.must(vk.CreateGraphicsPipelines(g_device, 0, 1, &pipeline, nil, &g_pipeline))
 	}
 	defer vk.DestroyPipelineLayout(g_device, g_pipeline_layout, nil)
 	defer vk.DestroyPipeline(g_device, g_pipeline, nil)
@@ -384,7 +385,7 @@ main :: proc() {
 			flags            = {.RESET_COMMAND_BUFFER},
 			queueFamilyIndex = indices.graphics.?,
 		}
-		must(vk.CreateCommandPool(g_device, &pool_info, nil, &g_command_pool))
+		vulkan_utils.must(vk.CreateCommandPool(g_device, &pool_info, nil, &g_command_pool))
 
 		alloc_info := vk.CommandBufferAllocateInfo {
 			sType              = .COMMAND_BUFFER_ALLOCATE_INFO,
@@ -392,7 +393,7 @@ main :: proc() {
 			level              = .PRIMARY,
 			commandBufferCount = MAX_FRAMES_IN_FLIGHT,
 		}
-		must(vk.AllocateCommandBuffers(g_device, &alloc_info, &g_command_buffers[0]))
+		vulkan_utils.must(vk.AllocateCommandBuffers(g_device, &alloc_info, &g_command_buffers[0]))
 	}
 	defer vk.DestroyCommandPool(g_device, g_command_pool, nil)
 
@@ -412,9 +413,9 @@ main :: proc() {
 			flags = {.SIGNALED},
 		}
 		for i in 0 ..< MAX_FRAMES_IN_FLIGHT {
-			must(vk.CreateSemaphore(g_device, &sem_info, nil, &g_image_available_semaphores[i]))
-			must(vk.CreateSemaphore(g_device, &sem_info, nil, &g_render_finished_semaphores[i]))
-			must(vk.CreateFence(g_device, &fence_info, nil, &g_in_flight_fences[i]))
+			vulkan_utils.must(vk.CreateSemaphore(g_device, &sem_info, nil, &g_image_available_semaphores[i]))
+			vulkan_utils.must(vk.CreateSemaphore(g_device, &sem_info, nil, &g_render_finished_semaphores[i]))
+			vulkan_utils.must(vk.CreateFence(g_device, &fence_info, nil, &g_in_flight_fences[i]))
 		}
 	}
 	defer for sem in g_image_available_semaphores {vk.DestroySemaphore(g_device, sem, nil)}
@@ -428,7 +429,7 @@ main :: proc() {
 		glfw.PollEvents()
 
 		// Wait for previous frame.
-		must(vk.WaitForFences(g_device, 1, &g_in_flight_fences[current_frame], true, max(u64)))
+		vulkan_utils.must(vk.WaitForFences(g_device, 1, &g_in_flight_fences[current_frame], true, max(u64)))
 
 		// Acquire an image from the swapchain.
 		image_index: u32
@@ -449,9 +450,9 @@ main :: proc() {
 			log.panicf("vulkan: acquire next image failure: %v", acquire_result)
 		}
 
-		must(vk.ResetFences(g_device, 1, &g_in_flight_fences[current_frame]))
+		vulkan_utils.must(vk.ResetFences(g_device, 1, &g_in_flight_fences[current_frame]))
 
-		must(vk.ResetCommandBuffer(g_command_buffers[current_frame], {}))
+		vulkan_utils.must(vk.ResetCommandBuffer(g_command_buffers[current_frame], {}))
 		record_command_buffer(g_command_buffers[current_frame], image_index)
 
 		// Submit.
@@ -465,7 +466,7 @@ main :: proc() {
 			signalSemaphoreCount = 1,
 			pSignalSemaphores    = &g_render_finished_semaphores[current_frame],
 		}
-		must(vk.QueueSubmit(g_graphics_queue, 1, &submit_info, g_in_flight_fences[current_frame]))
+		vulkan_utils.must(vk.QueueSubmit(g_graphics_queue, 1, &submit_info, g_in_flight_fences[current_frame]))
 
 		// Present.
 		present_info := vk.PresentInfoKHR {
@@ -813,17 +814,17 @@ create_swapchain :: proc() {
 			)
 		}
 
-		must(vk.CreateSwapchainKHR(g_device, &create_info, nil, &g_swapchain))
+		vulkan_utils.must(vk.CreateSwapchainKHR(g_device, &create_info, nil, &g_swapchain))
 	}
 
 	// Setup swapchain images.
 	{
 		count: u32
-		must(vk.GetSwapchainImagesKHR(g_device, g_swapchain, &count, nil))
+		vulkan_utils.must(vk.GetSwapchainImagesKHR(g_device, g_swapchain, &count, nil))
 
 		g_swapchain_images = make([]vk.Image, count)
 		g_swapchain_views = make([]vk.ImageView, count)
-		must(vk.GetSwapchainImagesKHR(g_device, g_swapchain, &count, raw_data(g_swapchain_images)))
+		vulkan_utils.must(vk.GetSwapchainImagesKHR(g_device, g_swapchain, &count, raw_data(g_swapchain_images)))
 
 		for image, i in g_swapchain_images {
 			create_info := vk.ImageViewCreateInfo {
@@ -833,7 +834,7 @@ create_swapchain :: proc() {
 				format = g_swapchain_format.format,
 				subresourceRange = {aspectMask = {.COLOR}, levelCount = 1, layerCount = 1},
 			}
-			must(vk.CreateImageView(g_device, &create_info, nil, &g_swapchain_views[i]))
+			vulkan_utils.must(vk.CreateImageView(g_device, &create_info, nil, &g_swapchain_views[i]))
 		}
 	}
 }
@@ -861,7 +862,7 @@ create_framebuffers :: proc() {
 			height          = g_swapchain_extent.height,
 			layers          = 1,
 		}
-		must(vk.CreateFramebuffer(g_device, &frame_buffer, nil, &g_swapchain_frame_buffers[i]))
+		vulkan_utils.must(vk.CreateFramebuffer(g_device, &frame_buffer, nil, &g_swapchain_frame_buffers[i]))
 	}
 }
 
@@ -873,6 +874,7 @@ create_vertex_buffer :: proc(vertices: []geometry.MyVertex) {
 	fmt.printfln("VERTEX BUFFER: creating staging buffer")
 	staging: Buffer
 	create_buffer(
+		g_device,
 		size_of(geometry.MyVertex),
 		len(vertices),
 		{.TRANSFER_SRC},
@@ -887,6 +889,7 @@ create_vertex_buffer :: proc(vertices: []geometry.MyVertex) {
 
 	fmt.printfln("VERTEX BUFFER: creating device local buffer")
 	create_buffer(
+		g_device,
 		size_of(geometry.MyVertex),
 		len(vertices),
 		{.VERTEX_BUFFER, .TRANSFER_DST},
@@ -908,6 +911,7 @@ create_index_buffer :: proc(indices: []u16) {
 
 	staging: Buffer
 	create_buffer(
+		g_device,
 		size_of(indices[0]),
 		len(indices),
 		{.TRANSFER_SRC},
@@ -921,6 +925,7 @@ create_index_buffer :: proc(indices: []u16) {
 	vk.UnmapMemory(g_device, staging.memory)
 
 	create_buffer(
+		g_device,
 		size_of(geometry.MyVertex),
 		len(indices),
 		{.INDEX_BUFFER, .TRANSFER_DST},
@@ -985,6 +990,7 @@ copy_buffer :: proc(src, dst: Buffer, size: vk.DeviceSize) {
 //You can either implement such an allocator yourself, or use the VulkanMemoryAllocator library provided by the GPUOpen initiative. 
 // https://vulkan-tutorial.com/Vertex_buffers/Staging_buffer
 create_buffer :: proc(
+	device: vk.Device,
 	member_size: int,
 	count: int,
 	usage: vk.BufferUsageFlags,
@@ -1005,23 +1011,29 @@ create_buffer :: proc(
 
 	fmt.println("BUFFER: gathering memory requirements")
 	mem_requirements: vk.MemoryRequirements
-	vk.GetBufferMemoryRequirements(g_device, buffer.buffer, &mem_requirements)
+	vk.GetBufferMemoryRequirements(device, buffer.buffer, &mem_requirements)
 
+	memory_type_index, ok := vulkan_utils.find_memory_type(
+		g_physical_device,
+		mem_requirements.memoryTypeBits,
+		{.HOST_VISIBLE, .HOST_COHERENT},
+	)
+	if !ok {
+		fmt.eprintf("Error: could not find_memory_type\n")
+		os.exit(1)
+	}
 	alloc_info := vk.MemoryAllocateInfo {
 		sType           = .MEMORY_ALLOCATE_INFO,
 		allocationSize  = mem_requirements.size,
-		memoryTypeIndex = find_memory_type(
-			mem_requirements.memoryTypeBits,
-			{.HOST_VISIBLE, .HOST_COHERENT},
-		),
+		memoryTypeIndex = memory_type_index,
 	}
 
-	if res := vk.AllocateMemory(g_device, &alloc_info, nil, &buffer.memory); res != .SUCCESS {
+	if res := vk.AllocateMemory(device, &alloc_info, nil, &buffer.memory); res != .SUCCESS {
 		fmt.eprintf("Error: Failed to allocate buffer memory!\n")
 		os.exit(1)
 	}
 
-	vk.BindBufferMemory(g_device, buffer.buffer, buffer.memory, 0)
+	vk.BindBufferMemory(device, buffer.buffer, buffer.memory, 0)
 }
 
 
@@ -1054,23 +1066,11 @@ recreate_swapchain :: proc() {
 	create_framebuffers()
 }
 
-create_shader_module :: proc(code: []byte) -> (module: vk.ShaderModule) {
-	as_u32 := slice.reinterpret([]u32, code)
-
-	create_info := vk.ShaderModuleCreateInfo {
-		sType    = .SHADER_MODULE_CREATE_INFO,
-		codeSize = len(code),
-		pCode    = raw_data(as_u32),
-	}
-	must(vk.CreateShaderModule(g_device, &create_info, nil, &module))
-	return
-}
-
 record_command_buffer :: proc(command_buffer: vk.CommandBuffer, image_index: u32) {
 	begin_info := vk.CommandBufferBeginInfo {
 		sType = .COMMAND_BUFFER_BEGIN_INFO,
 	}
-	must(vk.BeginCommandBuffer(command_buffer, &begin_info))
+	vulkan_utils.must(vk.BeginCommandBuffer(command_buffer, &begin_info))
 
 	clear_color := vk.ClearValue{}
 	clear_color.color.float32 = {0.0, 0.0, 0.0, 1.0}
@@ -1108,29 +1108,9 @@ record_command_buffer :: proc(command_buffer: vk.CommandBuffer, image_index: u32
 
 	vk.CmdEndRenderPass(command_buffer)
 
-	must(vk.EndCommandBuffer(command_buffer))
+	vulkan_utils.must(vk.EndCommandBuffer(command_buffer))
 }
 
 byte_arr_str :: proc(arr: ^[$N]byte) -> string {
 	return strings.truncate_to_byte(string(arr[:]), 0)
-}
-
-must :: proc(result: vk.Result, loc := #caller_location) {
-	if result != .SUCCESS {
-		log.panicf("vulkan failure %v", result, location = loc)
-	}
-}
-
-find_memory_type :: proc(type_filter: u32, properties: vk.MemoryPropertyFlags) -> u32 {
-	mem_properties: vk.PhysicalDeviceMemoryProperties
-	vk.GetPhysicalDeviceMemoryProperties(g_physical_device, &mem_properties)
-	for i in 0 ..< mem_properties.memoryTypeCount {
-		if (type_filter & (1 << i) != 0) &&
-		   (mem_properties.memoryTypes[i].propertyFlags & properties) == properties {
-			return i
-		}
-	}
-
-	fmt.eprintf("Error: Failed to find suitable memory type!\n")
-	os.exit(1)
 }
