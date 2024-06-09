@@ -1,8 +1,8 @@
 package vulkan_utils
 
 import "core:fmt"
-import "core:slice"
 import "core:log"
+import "core:slice"
 import "vendor:glfw"
 import vk "vendor:vulkan"
 
@@ -44,4 +44,23 @@ must :: proc(result: vk.Result, loc := #caller_location) {
 	if result != .SUCCESS {
 		log.panicf("vulkan failure %v", result, location = loc)
 	}
+}
+
+create_descriptor_set_layout :: proc(device: vk.Device, descriptorSetLayout: ^vk.DescriptorSetLayout) {
+    fmt.printfln("create_descriptor_set_layout")
+	uboLayoutBinding := vk.DescriptorSetLayoutBinding {
+		binding            = 0,
+		descriptorType     = vk.DescriptorType.UNIFORM_BUFFER,
+		descriptorCount    = 1,
+		stageFlags         = {.VERTEX},
+		pImmutableSamplers = nil,
+	}
+
+	layoutInfo := vk.DescriptorSetLayoutCreateInfo {
+		sType        = vk.StructureType.DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		bindingCount = 1,
+		pBindings    = &uboLayoutBinding,
+	}
+
+	must(vk.CreateDescriptorSetLayout(device, &layoutInfo, nil, descriptorSetLayout))
 }
